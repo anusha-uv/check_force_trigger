@@ -156,6 +156,7 @@ def lambda_handler(event, context):
     update_trips = {}
     flag = 0
     
+    response = {}
     for cust in vin_imeis:
         print(cust)
         trips_df = wr.s3.read_parquet(path="s3://datalogs-summary/vcu/vin/"+cust+"/"+cust+"-session.parquet")
@@ -179,20 +180,34 @@ def lambda_handler(event, context):
         ]]
         trips_df['Vin-Imei'] = cust
         
+        response[cust] = {}
+        
         if len(trips_df)>0:
             print("trips to consider columns :- ", trips_df.shape)
             trips_df = try_map_sessionids(trips_df, get_sessions(cust.split("-")[1], start_timestamp))
             for index, row in trips_df.iterrows():
                 trip_stats = get_trip(row)
                 key, updated_stats, recreation_needed = check_in_redis(trip_stats)
+                
+                trip_date = datetime.fromtimestamp(int(trip_stats["start_dttm"])).strftime('%Y-%m-%d')
+                if cust not in response:
+                    response[cust] = {}
+                if trip_date not in response[cust]:
+                    response[cust][trip_date] = []
+                
                 if recreation_needed:
                     recreate_trips.append(trip_stats)
+                    response[cust][trip_date].append(trip_stats)
+                    
                 elif updated_stats != trip_stats:
                     update_trips[key] = updated_stats
+                    response[cust][trip_date].append(updated_stats)
                 else:
                     correct_trip = correct_trips.get(cust, [])
                     correct_trip.append(key)
                     correct_trips[cust] = correct_trip
+                    response[cust][trip_date].append(trip_stats)
+                    
 
     print("Recreate :- ", len(recreate_trips), "\nCorrect :- ", len(correct_trips), "\nUpdate :- ", len(update_trips))
     
@@ -248,5 +263,5 @@ def lambda_handler(event, context):
 
     return {
         'statusCode': 200,
-        'body': json.dumps('Hello from Lambda!')
+        'body': json.dumps(response)
     }
